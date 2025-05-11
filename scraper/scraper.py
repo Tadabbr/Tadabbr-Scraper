@@ -3,13 +3,14 @@ from bs4.element import PageElement
 import re
 import requests
 import time
+import sys
 from requests.exceptions import RequestException
 
-
-SKIPWORDS = ["ومنه قول","ومن ذلك قول","وكما قال الآخر","ويقول :"]
+Unknown = "Unknown"
+SKIPWORDS = ["ومنه قول","ومن ذلك قول","وكما قال الآخر","ويقول :","كما قال الشاعر"]
 LASTPOET = ["ثم قال :"]
 UNPOET = ["القول في تأويل قوله"]
-UKNOWNIZE = ["وكما قال الآخر :"]
+UnknownIZE = ["وكما قال الآخر :"]
 def remove_diacritics(word):
     return re.sub(r'[\u064B-\u065F\u0670]', '', word)
 
@@ -97,11 +98,18 @@ def extract_poet(element: PageElement) -> str:
     limit = 0
     isdone = False
     while not isdone:
-        element = element.previous_sibling
-        if not element or element.name == "br":
-            continue
-        limit += 1 
-        if isinstance(element, Tag) and element.name == 'span':
+        try:
+            element = element.previous_sibling
+        except:
+            return Unknown
+        try:
+            if element.name == "br":
+                limit += 1 
+                continue
+        except AttributeError:
+            return Unknown
+        if isinstance(element, Tag) and any(element.name == x for x in ["span","a"]):
+            limit += float('inf')
             # Clean nested elements and check for name patterns
             for nested in element.find_all(['span', 'a']):
                 nested.decompose()
@@ -110,11 +118,22 @@ def extract_poet(element: PageElement) -> str:
             for word in UNPOET: 
                 if word in text:
                     continue
-                
+            if len(text) == 0:
+                return Unknown
             return clean_text(text)
-        if limit >= 5:
+        if limit > 3:
             isdone = True
-    return 'Unknown'
+    return Unknown
+
+def count_br_between(start, end):
+    count = 0
+    current = start.next_element
+    while current and current != end:
+        if isinstance(current, Tag) and current.name == 'br':
+            count += 1
+        current = current.next_element
+    return count
+
 
 def extract_context(element: PageElement, direction: str) -> str:
     """Context extraction using structural boundaries"""
@@ -152,51 +171,59 @@ def extract_poetry_data(html_content: str) -> list[dict]:
     soup = BeautifulSoup(html_content, 'html.parser')
     results = []
     verse, surah_name = extract_quranic_info(soup)
-    
+    poems = ['']
+    duplist = []
     # Find all poetry containers
     for poem in soup.find_all('p', align='center'):
+        poetry_lines = ['']
         poetry:bs4.element.Tag = poem.find('font', color="#800080")
-        if not poetry:
+        poems.reverse
+        try:
+            t =  any(clean_text(poetry.text).strip() == clean_text(x["context_after"]).strip() for x in results)
+        except:
+            t=False
+        if any(remove_diacritics(poetry.text).strip() == remove_diacritics(x.strip()) for x in poems) or t:
+            poems.reverse
             continue
-        # Extract and combine multi-line poetry
-        poetry_lines = []
-        print(poetry.text)
-        current_element = poetry
-        while current_element:
-            if current_element.text:
-                poetry_lines.append(current_element.text)
-            
-            # Move to next sibling, handling BeautifulSoup's navigation
-            next_element = current_element.next_sibling
-            while next_element and (not str(next_element).strip() or next_element.name == 'br'):
-                next_element = next_element.next_sibling
-            current_element = next_element if next_element and next_element.name != 'font' else None
-        
+        poetrynext = poetry.find_next("font",color="#800080")
+        poetry_lines.append(poetry.text)  
+        poetry.popTag
+        if count_br_between(poetry,poetrynext) < 5:
+            poetry_lines.append(poetrynext.text)
+            poetrynext.popTag 
+
         combined_poetry = ''.join(poetry_lines).strip()
-        
         # Extract poet and context
         poet_name = extract_poet(poem)
         context_before = extract_context(poem, 'before')
         context_after = extract_context(poem, 'after')
         
+                
+
         # Poet name fallback logic
         for word in LASTPOET:
             if (clean_text(word) in clean_text(context_before) or clean_text(word) == clean_text(context_before)):
-                if poet_name == "unknown" and results:
+                if poet_name == Unknown and results:
                     poet_name = results[-1]["poet"]
-        
-        for word in UKNOWNIZE:
+                    
+        for word in UnknownIZE:
             if word in context_before:
-                poet_name = "unknown"
+                poet_name = Unknown
         
-        results.append({
-            'poet': poet_name,
-            'poetry': clean_text(combined_poetry),
-            'context_before': context_before,
-            'context_after': context_after,
-            'verse': verse,
-            'surah': surah_name
-        })
+
+        key = poet_name+"__"+clean_text(combined_poetry)+"__"+context_before
+        if key not in duplist:
+            poems.append(remove_diacritics(combined_poetry))
+
+            results.append({
+                'poet': poet_name,
+                'poetry': clean_text(combined_poetry),
+                'context_before': context_before,
+                'context_after': context_after,
+                'verse': verse,
+                'surah': surah_name
+            })
+            duplist.append(key)
     
     return results
 
@@ -219,10 +246,13 @@ def write_output(data: list[dict], output_file: str):
         return added
 
 if __name__ == "__main__":
-    start = 33
+    try:
+        start = int(sys.argv[1])
+    except:
+        start = 27
     x = start
     for html_content in scrape_islamweb_ayas(start_aya=start, limit=1, delay=0.5):
         data = extract_poetry_data(html_content=html_content)
-        added = write_output(data, f"poetery_PAGE[{x}].txt")
+        added = write_output(data, f"output/poetery_PAGE[{x}].txt")
         print(f"Successfully processed {len(added)} in page {x}")
         x += 1
