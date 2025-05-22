@@ -1,0 +1,5 @@
+2025-05-21 18:59:57.825 | INFO     | __main__:assign_ayat:253 - AYA INDEX -> 21
+2025-05-21 18:59:57.826 | INFO     | __main__:assign_ayat:254 - SURAH INDEX -> 2
+2025-05-21 18:59:57.831 | WARNING  | __main__:assign_ayat:276 - recursive function on, verse skipped
+2025-05-21 18:59:57.832 | INFO     | __main__:assign_ayat:230 - ==========
+2025-05-21 18:59:57.854 | INFO     | __main__:assign_ayat:249 - TARGET -> الذي جعل لكم الأرض فراشا والسماء بناء وأنزل من السماء ماء فأخرج به من الثمرات رزقا لكم ۖ فلا تجعلوا لله أندادا وأنتم تعلمون

@@ -1,4 +1,16 @@
-*.txt
+output
 *.html
 /docs
 docs
+fixtures
+tests
+poetery*
+venv
+todo.md
+out.md
+fix*
+test*
+__pycache__
+profile_data.prof
+downloads
+

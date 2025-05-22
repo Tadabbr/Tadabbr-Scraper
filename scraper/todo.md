@@ -1,2 +1,0 @@
-- add logic so that if i have something like  ومنه قول الراجز :  i make the poet الراجز
-    - test page :46
