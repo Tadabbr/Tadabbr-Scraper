@@ -13,4 +13,4 @@ test*
 __pycache__
 profile_data.prof
 downloads
-
+*.log

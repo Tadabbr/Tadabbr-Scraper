@@ -39,7 +39,6 @@ def clean_text(text: str, state: str = "before") -> str:
     text = araby.strip_diacritics(text)
     text = text.replace(":", "").replace(",", "").replace("،", "").strip()
     text = re.sub(r"nindex\.php\?[^\s]*", "", text)
-    # text = re.sub(r"\[\s*ص:\s*\d+\s*\]", "", text)
     if state == "after":
         for sword in SKIPWORDS:
             text = text.split(sword)[0]
@@ -69,6 +68,7 @@ def extract_quranic_info(soup):
         aya = tparts[3].strip()
         ayaparts = aya.split('"')
         verse = ayaparts[1].strip()
+        logger.info(f"VERSE -> {verse}")
         return verse, araby.strip_diacritics(surah)
     except Exception as e:
         logger.exception("Error extracting Quranic info", e)
@@ -223,25 +223,49 @@ def normalize(x):
 aya_index = 1
 aya_builder_list = []
 last_surah_index = 1
-def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str]: #aya,key
+last_verse = "TEMPORARYDATA"
+
+def hit(target,aya,SURAHN:int,increment:int):
+    global aya_index
+    global aya_builder_list
+    global last_verse
+    # reset aya_builder_list
+    aya_builder_list = aya.replace(target,"").split(" ")
+    
+    # make key
+    key = f"{SURAHN}:{aya_index}"
+
+    # increment aya
+    aya_index += increment
+    return key
+def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str,bool]: #aya,key
     global aya_index
     global aya_builder_list
     global last_surah_index
+    global last_verse
     logger.info(f"{'=' * 10}")
 
+    logger.info(f"LastVerse -> {last_verse[-len(current_verse):]}")
+    logger.info(f"curren_verse -> {current_verse}")
+
+    
     # surah number in the quran
     SURAHN = SURAHNUMBERHASHMAP[surah_name.strip()] 
     
     # reset aya index if surah changes
     if SURAHN != last_surah_index:
-        exit()
         aya_index = 1
         last_surah_index = SURAHN
     # get the target verse
     target = get_verse_text(surah_number=SURAHN,ayah_number=aya_index)
 
+    if current_verse == last_verse[-len(current_verse):]:
+        return target, f"{SURAHN}:{aya_index}"
+    last_verse = current_verse
+
     # add the current aya to the aya builder list 
     aya_builder_list.append(current_verse)
+
     # normalize target and current verse
     target_check = normalize(target)
     current_check = normalize(aya_builder_list)
@@ -254,6 +278,7 @@ def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str]: #aya,key
     logger.info(f"AYA INDEX -> {aya_index}")
     logger.info(f"SURAH INDEX -> {SURAHN}")
 
+     
      # Get first meaningful word of target (space-based before normalization)
     target_first_word = normalize(target.split()[0]) if ' ' in target else target_check
 
@@ -270,6 +295,7 @@ def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str]: #aya,key
             current_check = realigned_text
             logger.info(f"Realigned to target start at index {split_index}")
 
+    '''
     # 2. Length Overflow Check
     if len(current_check) > len(target_check) and target_check not in current_check:
         logger.warning(f"Skipping aya {aya_index} - Length overflow without target match")
@@ -277,23 +303,28 @@ def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str]: #aya,key
         key = f"{SURAHN}:{aya_index}"
         aya_builder_list.clear()
         return "", key
-
-
-    logger.info(f"{'=' * 10}")
+    '''
 
     # check if the target is in the current check
     if target_check in current_check:
-        # reset aya_builder_list
-        aya_builder_list.clear()
-        # make key
-        key = f"{SURAHN}:{aya_index}"
-        # increment aya
-        aya_index += 1
+        key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=1)
         return target,key
-    else:
-        key = f"{SURAHN}:{aya_index}"
+        
+    elif normalize(get_verse_text(surah_number=SURAHN,ayah_number=aya_index+1)) in current_check: # checking next aya
+            key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=2)
+            return target,key
 
-        return target,key
+    elif normalize(get_verse_text(surah_number=SURAHN,ayah_number=aya_index+2)) in current_check: # checking next aya
+            key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=3)
+            return target,key
+
+    else:
+        return target, f"{SURAHN}:{aya_index}"
+
+    
+    logger.info(f"{'=' * 10}")
+
+   
         
 
 
