@@ -12,6 +12,7 @@ import json
 import sqlite3
 from pprint import pp as print
 import pyarabic.araby as araby
+from urllib.parse import parse_qs
 
 SKIPWORDS = ["ومنه قول", "ومن ذلك قول", "وكما قال الآخر", "ولآخر :"]
 Unknown = "FiLLER"
@@ -30,7 +31,7 @@ with open("surah_number_map.json", "r", encoding="utf-8") as f:
 # Flag to control downloading mode
 download_only = False  # Set to True to download without parsing
 
-logger.add("debug.log", rotation="1 MB", retention="7 days", level="DEBUG")
+logger.add("debug.log", rotation="100 MB", retention="7 days", level="DEBUG")
 
 AYAT = json.load(open("ayat.json"))
 
@@ -55,21 +56,96 @@ def count_br_between(start, end):
     return count
 
 
-def extract_quranic_info(soup):
+
+
+def isayanumbering(s:str) -> bool: # is (25) for example
+    s = s.strip().replace(" ","")
+    return bool(re.match(r'^\(\d+\)$', s))
+
+global LASTKEYS 
+LASTKEYS = []
+
+def get_ayat(soup,surah):
+    global LASTKEYS
+    # Extract all elements with class 'quran'
+    quran_elements = soup.find_all('a', href="#docu")
+    for i,element in enumerate(quran_elements):
+        sibl = None 
+        docu_element = element
+
+        while element and not sibl:
+            element = element.next_element
+            if element and isinstance(element, str) and element.strip():
+                # Make sure it's not inside the original element
+                if not docu_element in element.parents:
+                    sibl = element.strip()
+        if sibl.count(")") > 1 or (not isayanumbering(s=sibl) and sibl.count(")") == 1):
+            quran_elements = quran_elements[:i+1]
+            break
+    
+    ayat = []
+    keys = []
+
+    for i,element in enumerate(quran_elements):
+        # Get the `onclick` attribute value
+        onclick_js = element.get('onclick', '')
+        
+        # Extract the `src` from the IFRAME string
+        # Split the string to isolate the src value
+        if "src=" in onclick_js:
+            # Split after "src='" and then split again at the next "'"
+            src_value = onclick_js.split("ayatafseer.php?")[1].split("'")[0]
+            params = parse_qs(src_value)
+            surano = params.get("surano", [None])[0]
+            ayano = params.get("ayano", [None])[0]
+            surano = str(surano).strip().replace("\\","")
+            ayano = str(ayano).strip().replace("\\","")
+#            logger.info(f"surahno: {surano}")   
+#            logger.info(f"ayano: {ayano}")
+            try:
+                surano = int(surano)
+                ayano = int(ayano)
+            except Exception as e:
+#                logger.error(e)
+                continue
+
+            if int(SURAHNUMBERHASHMAP[surah.strip()]) != int(surano):
+                continue
+            
+            key = f"{surano}:{ayano}"
+            LASTKEYS = [key]
+            keys.append(key)
+
+    if len(keys) == 0:
+        return LASTKEYS
+    return list(set(keys))
+
+
+def extract_quranic_info(soup,is_keys:bool=False):
     try:
         title = soup.find("title").get_text()
         tparts = title.split("-")
         surah = tparts[2].strip().replace("تفسير سورة", "")
 
+        verse = False
         if surah:
             surah = surah.strip()
         if surah == "القول في تأويل البسملة".strip():
             surah = "الفاتحة"
-        aya = tparts[3].strip()
-        ayaparts = aya.split('"')
-        verse = ayaparts[1].strip()
-        logger.info(f"VERSE -> {verse}")
-        return verse, araby.strip_diacritics(surah)
+        surah = araby.strip_diacritics(surah)
+        try:
+            if not is_keys:
+                verse = get_ayat(soup=soup,surah=surah)
+        except Exception as e:
+            logger.error(e)
+            pass
+
+#        logger.info(f"VERSE -> {verse}")
+        if not is_keys:
+            return verse, surah
+        else:
+            return verse,surah
+
     except Exception as e:
         logger.exception("Error extracting Quranic info", e)
         return None, None
@@ -209,136 +285,18 @@ def get_verse_text(surah_number, ayah_number):
 
 
 
-
-def normalize(x):
-    if type(x) == list: 
-        x = " ".join(x) # stringify 
-
-    # remove arabic diacritics:
-    x = str(araby.strip_diacritics(x))
-    # remove spaces and concatenate 
-    x = x.replace(" ","")
-    return x
-
-aya_index = 1
-aya_builder_list = []
-last_surah_index = 1
-last_verse = "TEMPORARYDATA"
-
-def hit(target,aya,SURAHN:int,increment:int):
-    global aya_index
-    global aya_builder_list
-    global last_verse
-    # reset aya_builder_list
-    aya_builder_list = aya.replace(target,"").split(" ")
-    
-    # make key
-    key = f"{SURAHN}:{aya_index}"
-
-    # increment aya
-    aya_index += increment
-    return key
-def assign_ayat(current_verse:str,surah_name:str)-> tuple[str,str,bool]: #aya,key
-    global aya_index
-    global aya_builder_list
-    global last_surah_index
-    global last_verse
-    logger.info(f"{'=' * 10}")
-
-    logger.info(f"LastVerse -> {last_verse[-len(current_verse):]}")
-    logger.info(f"curren_verse -> {current_verse}")
-
-    
-    # surah number in the quran
-    SURAHN = SURAHNUMBERHASHMAP[surah_name.strip()] 
-    
-    # reset aya index if surah changes
-    if SURAHN != last_surah_index:
-        aya_index = 1
-        last_surah_index = SURAHN
-    # get the target verse
-    target = get_verse_text(surah_number=SURAHN,ayah_number=aya_index)
-
-    if current_verse == last_verse[-len(current_verse):]:
-        return target, f"{SURAHN}:{aya_index}"
-    last_verse = current_verse
-
-    # add the current aya to the aya builder list 
-    aya_builder_list.append(current_verse)
-
-    # normalize target and current verse
-    target_check = normalize(target)
-    current_check = normalize(aya_builder_list)
-
-    # check if the target is in the current check
-    logger.info(f"TARGET -> {target}")
-    logger.info(f"BUILDER_LIST -> {" ".join(aya_builder_list)}")
-    logger.info(f"TARGET CHECK -> {target_check}")
-    logger.info(f"AYA CHECK -> {current_check}")
-    logger.info(f"AYA INDEX -> {aya_index}")
-    logger.info(f"SURAH INDEX -> {SURAHN}")
-
-     
-     # Get first meaningful word of target (space-based before normalization)
-    target_first_word = normalize(target.split()[0]) if ' ' in target else target_check
-
-    # 1. Word Alignment Check
-    if not current_check.startswith(target_first_word):
-        # Find if target's first word exists later in current_check
-        if target_first_word in current_check:
-            # Split accumulated text at first occurrence of target word
-            split_index = current_check.find(target_first_word)
-            realigned_text = current_check[split_index:]
-            
-            # Reset builder with realigned content  
-            aya_builder_list = [realigned_text]
-            current_check = realigned_text
-            logger.info(f"Realigned to target start at index {split_index}")
-
-    '''
-    # 2. Length Overflow Check
-    if len(current_check) > len(target_check) and target_check not in current_check:
-        logger.warning(f"Skipping aya {aya_index} - Length overflow without target match")
-        aya_index += 1
-        key = f"{SURAHN}:{aya_index}"
-        aya_builder_list.clear()
-        return "", key
-    '''
-
-    # check if the target is in the current check
-    if target_check in current_check:
-        key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=1)
-        return target,key
-        
-    elif normalize(get_verse_text(surah_number=SURAHN,ayah_number=aya_index+1)) in current_check: # checking next aya
-            key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=2)
-            return target,key
-
-    elif normalize(get_verse_text(surah_number=SURAHN,ayah_number=aya_index+2)) in current_check: # checking next aya
-            key = hit(target=target,aya=current_verse,SURAHN=SURAHN,increment=3)
-            return target,key
-
-    else:
-        return target, f"{SURAHN}:{aya_index}"
-
-    
-    logger.info(f"{'=' * 10}")
-
-   
-        
-
-
 def extract_poetry_data(
-    html_content: str, html_content_next_page: str = ""
+    html_content: str, verse_keys
 ) -> list[dict]:
     
     try:
         soup = BeautifulSoup(html_content, "lxml")
 
         results = []
-        verse_word, surah_name = extract_quranic_info(soup)
-        # get full aya
-        verse,verse_key = assign_ayat(current_verse=verse_word,surah_name=surah_name)
+        if not verse_keys:
+            verse_keys, surah_name = extract_quranic_info(soup,is_keys=False)
+        else:
+            _, surah_name = extract_quranic_info(soup,is_keys=True)
         
 
         poems = [""]
@@ -396,11 +354,9 @@ def extract_poetry_data(
                     "poetry": clean_text(combined_poetry),
                     "context_before": context_before,
                     "context_after": context_after,
-                    "verse": verse,
                     "surah": surah_name,
                     "tafsir": "تفسير الطبري = جامع البيان عن تأويل آي القرآن",
-                    "surah_key": verse_key,
-                    "word":verse_word
+                    "surah_keys": verse_keys,
                 }
             )
         return results
@@ -431,38 +387,42 @@ def save_to_sqlite(
                 surah TEXT,
                 tafsir TEXT,
                 verse_key TEXT,
-                word TEXT,
-                UNIQUE(context_after, poetry, context_before)
+                UNIQUE(context_after, poetry, context_before,verse_key,verse)
             )
         """
         )
 
         inserted_count = 0
         for item in data:
-            try:
-                cursor.execute(
-                    f"""
-                    INSERT OR IGNORE INTO {table_name} 
-                    (poet, poetry, context_before, context_after, verse, surah, tafsir,verse_key,word)
-                    VALUES (?, ?, ?, ?, ?, ?, ?,?,?)
-                """,
-                    (
-                        item["poet"],
-                        item["poetry"],
-                        item["context_before"],
-                        item["context_after"],
-                        item["verse"],
-                        item["surah"],
-                        item["tafsir"],
-                        item["surah_key"],
-                        item["word"]
-                    ),
-                )
-                if cursor.rowcount > 0:
-                    inserted_count += 1
-            except Exception as inner_e:
-                logger.exception("Insert failed for item", inner_e)
-                continue
+            for key in item["surah_keys"]:
+                try:
+                    verse = get_verse_text(int(key.split(":")[0]),int(key.split(":")[1]))
+                except Exception as e:
+                    logger.error(f"Error: {e} , ITEM:{item}")
+                    continue
+                try:
+                    cursor.execute(
+                        f"""
+                        INSERT OR IGNORE INTO {table_name} 
+                        (poet, poetry, context_before, context_after, verse, surah, tafsir,verse_key)
+                        VALUES (?, ?, ?, ?, ?, ?, ?,?)
+                    """,
+                        (
+                            item["poet"],
+                            item["poetry"],
+                            item["context_before"],
+                            item["context_after"],
+                            verse,
+                            item["surah"],
+                            item["tafsir"],
+                            key,
+                        ),
+                    )
+                    if cursor.rowcount > 0:
+                        inserted_count += 1
+                except Exception as inner_e:
+                    logger.exception("Insert failed for item", inner_e)
+                    continue
 
         conn.commit()
         conn.close()
@@ -479,22 +439,28 @@ def parse_all_downloaded():
         (f for f in os.listdir(DOWNLOADS_FOLDER) if f.endswith(".html")),
         key=lambda name: int(re.search(r"page_(\d+)\.html", name).group(1)),
     )
-    logger.info(f"Found {len(files)} downloaded pages to process.")
+#    logger.info(f"Found {len(files)} downloaded pages to process.")
 
     seen = set()
     total_results = []
-    added = 0
-
+    RESULTS_COUNT = 0 
+    ftov = {'page_16.html':["1:1"],'page_17.html':["1:1"],'page_18.html':["1:1"],'page_19.html':["1:2"]}
+    #files = ["page_30.html","page_31.html"]
     for i, file in enumerate(files):
         logger.info(file)
-        output_file = os.path.join("output", f"poetery.db")
-        added += save_to_sqlite(total_results)
-        total_results = []
+        if i % 500 == 0:
+            output_file = os.path.join("output", f"poetery.db")
+            RESULTS_COUNT += len(total_results)
+            save_to_sqlite(total_results)
+            total_results = []
         file_path = os.path.join(DOWNLOADS_FOLDER, file)
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 html = f.read()
-            data = extract_poetry_data(html)
+            if ftov.get(file):
+                data = extract_poetry_data(html,verse_keys=ftov.get(file))
+            else:
+                data = extract_poetry_data(html,verse_keys=None)
             if data:
                 for item in data:
                     total_results.append(item)
@@ -502,7 +468,8 @@ def parse_all_downloaded():
                 continue
         except Exception as e:
             logger.exception(f"Error parsing {file}")
-
+    save_to_sqlite(total_results)
+    return RESULTS_COUNT
 
 if __name__ == "__main__":
     times = []
@@ -512,4 +479,5 @@ if __name__ == "__main__":
     UnknownIZE = [clean_text(word) for word in UnknownIZE]
     LASTPOET = [clean_text(word) for word in LASTPOET]
 
-    parse_all_downloaded()
+    num = parse_all_downloaded()
+    print(f"SCRAPED {num} POETS")
