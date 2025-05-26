@@ -1,19 +1,13 @@
-import aiohttp
-import asyncio
 import re
-import time
-import sys
 from bs4 import BeautifulSoup, Tag
 from bs4.element import PageElement
 from loguru import logger
 import os
-import random
 import json
 import sqlite3
-from pprint import pp as print
 import pyarabic.araby as araby
 from urllib.parse import parse_qs
-import concurrent.futures
+import argparse
 
 SKIPWORDS = ["ومنه قول", "ومن ذلك قول", "وكما قال الآخر", "ولآخر :"]
 Unknown = "FiLLER"
@@ -21,15 +15,13 @@ LASTPOET = ["ثم قال :"]
 UNPOET = ["القول في تأويل قوله", 'قوله : " "', "وتأويل قوله : ( )"]
 UnknownIZE = ["وكما قال الآخر :"]
 # Folder for downloaded HTML files
-DOWNLOADS_FOLDER = "downloads"
-PARSED_FOLDER = "output"
 
 
 with open("surah_number_map.json", "r", encoding="utf-8") as f:
     SURAHNUMBERHASHMAP = json.load(f)
 
 
-logger.add("debug.log", rotation="100 MB", retention="7 days", level="DEBUG")
+logger.add("debug.log", rotation="2 MB", retention="7 days", level="DEBUG")
 
 AYAT = json.load(open("ayat.json"))
 
@@ -349,7 +341,6 @@ def extract_poetry_data(html_content: str, verse_keys) -> list[dict]:
                     "context_before": context_before,
                     "context_after": context_after,
                     "surah": surah_name,
-                    "tafsir": "تفسير الطبري = جامع البيان عن تأويل آي القرآن",
                     "surah_keys": verse_keys,
                 }
             )
@@ -410,7 +401,7 @@ def save_to_sqlite(
                             item["context_after"],
                             verse,
                             item["surah"],
-                            item["tafsir"],
+                            TAFSIR_NAME,
                             key,
                         ),
                     )
@@ -430,7 +421,7 @@ def save_to_sqlite(
 
 
 def parse_all_downloaded():
-    os.makedirs(PARSED_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
     files = sorted(
         (f for f in os.listdir(DOWNLOADS_FOLDER) if f.endswith(".html")),
         key=lambda name: int(re.search(r"page_(\d+)\.html", name).group(1)),
@@ -450,12 +441,12 @@ def parse_all_downloaded():
         "page_18.html": ["1:1"],
         "page_19.html": ["1:2"],
     }
+    output_file = os.path.join(OUTPUT_FOLDER, f"poetery.db")
     for i, file in enumerate(files):
         logger.info(file)
-        if i % 200 == 0:
-            output_file = os.path.join("output", f"poetery.db")
+        if i % SAVERATE == 0:
             RESULTS_COUNT += len(total_results)
-            save_to_sqlite(total_results)
+            save_to_sqlite(total_results,db_path=output_file)
             total_results = []
         file_path = os.path.join(DOWNLOADS_FOLDER, file)
         try:
@@ -471,8 +462,8 @@ def parse_all_downloaded():
             else:
                 continue
         except Exception as e:
-            logger.exception(f"Error parsing {file}")
-    save_to_sqlite(total_results)
+            logger.exception(f"Error parsing {file}: {e}")
+    save_to_sqlite(total_results,db_path=output_file)
     return RESULTS_COUNT
 
 
@@ -480,6 +471,16 @@ if __name__ == "__main__":
     UNPOET = [clean_text(word) for word in UNPOET]
     UnknownIZE = [clean_text(word) for word in UnknownIZE]
     LASTPOET = [clean_text(word) for word in LASTPOET]
-
+    parser = argparse.ArgumentParser(description="Scrape tafsir data and save it to a sqlite db.")
+    
+    parser.add_argument('--downloads', type=str, default='downloads', help='Path to downloads folder (default: downloads)')
+    parser.add_argument('--output', type=str, default='output', help='Path to output folder (default: output)')
+    parser.add_argument('--tafsir', type=str, default='NOTGIVIN', help='Name of the tafsir to process (default: NOTGIVIN)')
+    parser.add_argument("--saverate",type=int,default=25,help="saves to db after X files parsed (default:25)") #saves to db after X files parsed
+    args = parser.parse_args()
+    DOWNLOADS_FOLDER = args.downloads
+    OUTPUT_FOLDER = args.output
+    TAFSIR_NAME = args.tafsir
+    SAVERATE = args.saverate
     num = parse_all_downloaded()
     print(f"SCRAPED {num} POETS")
